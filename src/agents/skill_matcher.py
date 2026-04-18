@@ -8,7 +8,7 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 # Reuse the same model as store_resume.py and search_resumes.py
 # Critical — must be identical model for consistent vector space
 embedder = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-mpnet-base-v2"
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
 def cosine_similarity(vec1: list, vec2: list) -> float:

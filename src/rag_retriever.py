@@ -11,7 +11,7 @@ supabase = create_client(
 )
 
 embedder = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-mpnet-base-v2"
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
 def get_similar_candidates(query: str, top_k: int = 2) -> list:
