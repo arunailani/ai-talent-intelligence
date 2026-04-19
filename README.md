@@ -101,8 +101,8 @@ Run the API:
 
 ## Live Demo
 
-- UI: https://yourname-ai-talent.streamlit.app
-- API Docs: https://your-api.onrender.com/docs
+- UI: https://ai-talent-intelligence.streamlit.app
+- API Docs: Coming soon (Render deployment pending)
 
 ## Author
 
