@@ -268,7 +268,7 @@ with tab_screen:
                         )
 
                         interview_url = (
-                            f"http://localhost:8501/interview"
+                            f"https://ai-talent-intelligence.streamlit.app/interview"
                             f"?session={session_id}"
                         )
 
