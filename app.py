@@ -373,7 +373,7 @@ with tab_dashboard:
                 if status == "pending":
                     session_id = session.get("id")
                     interview_url = (
-                        f"http://localhost:8501/interview"
+                        f"https://ai-talent-intelligence.streamlit.app/interview"
                         f"?session={session_id}"
                     )
                     st.markdown("**Interview Link:**")
