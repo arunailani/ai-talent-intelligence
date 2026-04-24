@@ -1,4 +1,3 @@
-import fitz  # pymupdf
 from dotenv import load_dotenv
 import os
 from supabase import create_client
@@ -6,6 +5,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from document_extractor import extract_text
 
 load_dotenv()
 
@@ -24,23 +24,6 @@ llm = ChatGroq(
     temperature=0,
     max_retries=1
 )
-
-# ── PDF Extraction using pymupdf ──────────────────────────
-def extract_text(pdf_path: str) -> str:
-    """
-    Extracts clean text from any PDF — including Canva,
-    Word exports, and standard PDFs.
-    """
-    doc = fitz.open(pdf_path)
-    full_text = ""
-    for page in doc:
-        full_text += page.get_text()
-    doc.close()
-
-    # Basic cleanup — remove excessive blank lines
-    lines = [line.strip() for line in full_text.splitlines()]
-    cleaned = "\n".join(line for line in lines if line)
-    return cleaned
 
 # ── LLM Summary using LCEL chain ─────────────────────────
 def summarize_resume(raw_text: str) -> str:

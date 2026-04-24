@@ -1,4 +1,3 @@
-import fitz
 import json
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
@@ -23,15 +22,15 @@ def extract_resume_node(state: dict) -> dict:
     """
     print("\n[Agent 1] Resume Extractor running...")
 
-    # Extract text using pymupdf
-    doc = fitz.open(state["pdf_path"])
-    raw_text = ""
-    for page in doc:
-        raw_text += page.get_text()
-    doc.close()
+    
+    import sys
+    import os
+    sys.path.append(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    )
+    from document_extractor import extract_text
 
-    lines = [l.strip() for l in raw_text.splitlines()]
-    clean_text = "\n".join(l for l in lines if l)
+    clean_text = extract_text(state["pdf_path"])
 
     # Ask LLM to extract structured information
     prompt = ChatPromptTemplate.from_messages([

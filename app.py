@@ -43,8 +43,8 @@ with tab_screen:
         st.subheader("Inputs")
 
         uploaded_files = st.file_uploader(
-            "Upload resume PDFs",
-            type=["pdf"],
+            "Upload resumes (PDF or Word)",
+            type=["pdf", "docx", "txt"],
             accept_multiple_files=True
         )
 
@@ -105,8 +105,9 @@ with tab_screen:
                     0, text="Starting pipeline..."
                 )
 
+                file_ext = os.path.splitext(uploaded_file.name)[1]
                 with tempfile.NamedTemporaryFile(
-                    delete=False, suffix=".pdf"
+                    delete=False, suffix=file_ext
                 ) as tmp:
                     tmp.write(uploaded_file.read())
                     tmp_path = tmp.name
