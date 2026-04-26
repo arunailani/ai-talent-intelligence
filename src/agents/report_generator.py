@@ -14,7 +14,7 @@ load_dotenv()
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile",
-    temperature=0,
+    temperature=0.3,
     max_retries=1
 )
 
@@ -38,8 +38,10 @@ def generate_report_node(state: dict) -> dict:
     if similar:
         similar_context = "\n\nSimilar candidates in database:\n"
         for i, c in enumerate(similar, 1):
+            skills_str = ", ".join(c.get("skills", [])) or "N/A"
             similar_context += (
-                f"{i}. {c['summary']} "
+                f"{i}. {c['name']} — {c['summary']} "
+                f"Skills: {skills_str} "
                 f"(similarity: {c['similarity']}%)\n"
             )
 

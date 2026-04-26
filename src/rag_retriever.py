@@ -39,11 +39,16 @@ def get_similar_candidates(query: str, top_k: int = 2) -> list:
 
         results = []
         for match in response.data:
+            if match["similarity"] < 0.65:
+                continue
             metadata = match.get("metadata") or {}
+            summary = metadata.get("summary", "")
+            first_sentence = (summary.split(".")[0].strip() + ".") if summary else ""
             results.append({
-                "summary":    metadata.get("summary", ""),
-                "source":     metadata.get("source", ""),
-                "similarity": round(match["similarity"] * 100, 1)
+                "name":       metadata.get("name", metadata.get("source", "Unknown")),
+                "skills":     (metadata.get("skills") or [])[:5],
+                "similarity": round(match["similarity"] * 100, 1),
+                "summary":    first_sentence
             })
 
         return results

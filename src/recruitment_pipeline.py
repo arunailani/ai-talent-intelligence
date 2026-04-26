@@ -1,4 +1,4 @@
-from langgraph.graph import StateGraph, END
+from langgraph.graph import StateGraph, START, END
 from agents.state import RecruitmentState
 from agents.resume_extractor import extract_resume_node
 from agents.jd_analyzer import analyze_jd_node
@@ -27,9 +27,13 @@ def build_pipeline():
     graph.add_node("match_skills",    match_skills_node)
     graph.add_node("generate_report", generate_report_node)
 
-    graph.set_entry_point("extract_resume")
-    graph.add_edge("extract_resume",  "analyze_jd")
-    graph.add_edge("analyze_jd",      "match_skills")
+    # Agent 1 and Agent 2 are independent — fan-out from START so
+    # they run in parallel. LangGraph merges state and only starts
+    # Agent 3 once BOTH have completed (fan-in join).
+    graph.add_edge(START,            "extract_resume")
+    graph.add_edge(START,            "analyze_jd")
+    graph.add_edge("extract_resume", "match_skills")
+    graph.add_edge("analyze_jd",     "match_skills")
     graph.add_edge("match_skills",    "generate_report")
     graph.add_edge("generate_report", END)
 
@@ -66,7 +70,14 @@ def run_pipeline(pdf_path: str, job_description: str) -> dict:
         "recommendation":    None
     }
 
-    final_state = pipeline.invoke(initial_state)
+    run_label = os.path.splitext(os.path.basename(pdf_path))[0]
+    config = {
+        "run_name": f"Recruitment — {run_label}",
+        "tags": ["recruitment-pipeline"],
+        "metadata": {"candidate_file": run_label}
+    }
+
+    final_state = pipeline.invoke(initial_state, config=config)
     final_state["processing_status"] = "complete"
     return final_state
 

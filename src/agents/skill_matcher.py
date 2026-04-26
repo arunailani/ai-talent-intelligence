@@ -38,7 +38,8 @@ def cosine_similarity(vec1: list, vec2: list) -> float:
 def skill_is_present(
     required_skill: str,
     candidate_skills: list,
-    threshold: float = 0.55
+    threshold: float = 0.55,
+    candidate_vectors: list = None
 ) -> bool:
     """
     Checks if a required skill is semantically present
@@ -52,6 +53,9 @@ def skill_is_present(
     is enough to count as a match. Tunable based on
     how strict you want the matching to be.
 
+    Pass pre-cached candidate_vectors to avoid re-embedding
+    the same candidate skills on every call (O(n+m) vs O(n×m)).
+
     Examples at threshold 0.55:
     "data visualization" vs "visualization (quicksight)" → ~0.78 → MATCH
     "stakeholder management" vs "project management"    → ~0.71 → MATCH
@@ -63,8 +67,11 @@ def skill_is_present(
     best_score = 0.0
     best_match = ""
 
-    for candidate_skill in candidate_skills:
-        candidate_vector = embedder.embed_query(candidate_skill)
+    for i, candidate_skill in enumerate(candidate_skills):
+        if candidate_vectors is not None:
+            candidate_vector = candidate_vectors[i]
+        else:
+            candidate_vector = embedder.embed_query(candidate_skill)
         score = cosine_similarity(required_vector, candidate_vector)
 
         if score > best_score:
@@ -97,6 +104,11 @@ def match_skills_node(state: dict) -> dict:
     - Inferred skills: "Stakeholder Management" ≈ "Project Management"
     - Abbreviations: "ML" ≈ "Machine Learning"
     - Varied phrasing: "team leadership" ≈ "led a team of 10"
+
+    Candidate skill vectors are pre-cached once (O(n+m))
+    rather than re-embedded per required skill (O(n×m)).
+
+    Final score = required_match × 0.8 + preferred_match × 0.2
     """
     print("\n[Agent 3] Skill Matcher running (semantic mode)...")
 
@@ -112,6 +124,13 @@ def match_skills_node(state: dict) -> dict:
             "match_score":    0.0
         }
 
+    # Pre-cache candidate skill embeddings once — O(n) instead of re-embedding
+    # on every required/preferred skill comparison (which would be O(n×m))
+    candidate_vectors = (
+        embedder.embed_documents(candidate_skills)
+        if candidate_skills else []
+    )
+
     print(f"\n  Checking {len(required_skills)} required skills "
           f"against {len(candidate_skills)} candidate skills:\n")
 
@@ -119,26 +138,43 @@ def match_skills_node(state: dict) -> dict:
     missing = []
 
     for req_skill in required_skills:
-        if skill_is_present(req_skill, candidate_skills):
+        if skill_is_present(req_skill, candidate_skills,
+                            candidate_vectors=candidate_vectors):
             matched.append(req_skill)
         else:
             missing.append(req_skill)
 
-    # Check preferred skills as bonus — does not affect score
+    # Check preferred skills — now contributes 20% to final score
     bonus = [
         pref for pref in preferred_skills
-        if skill_is_present(pref, candidate_skills, threshold=0.55)
+        if skill_is_present(pref, candidate_skills, threshold=0.55,
+                            candidate_vectors=candidate_vectors)
     ]
 
-    score = round(len(matched) / len(required_skills) * 100, 1)
+    # 80/20 weighted score: required skills drive the decision,
+    # preferred skills provide a meaningful but bounded boost
+    required_match_score = round(len(matched) / len(required_skills) * 100, 1)
+
+    if preferred_skills:
+        preferred_match_score = round(
+            len(bonus) / len(preferred_skills) * 100, 1
+        )
+    else:
+        preferred_match_score = 0.0
+
+    final_score = round(
+        (required_match_score * 0.8) + (preferred_match_score * 0.2), 1
+    )
 
     print(f"\n  Matched  : {matched}")
     print(f"  Missing  : {missing}")
     print(f"  Bonus    : {bonus}")
-    print(f"  Score    : {score}%")
+    print(f"  Required match : {required_match_score}%")
+    print(f"  Preferred match: {preferred_match_score}%")
+    print(f"  Final score    : {final_score}%")
 
     return {
         "matched_skills": matched,
         "missing_skills": missing,
-        "match_score":    score
+        "match_score":    final_score
     }
