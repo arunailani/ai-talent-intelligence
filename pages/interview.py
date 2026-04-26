@@ -17,81 +17,86 @@ st.set_page_config(
     layout="centered"
 )
 
-# ── Proctoring JavaScript ─────────────────────────────────
-# Injects browser-level tab visibility detection.
-# When candidate switches tabs or minimises window,
-# the browser fires a visibilitychange event.
-# We count violations and terminate after 2 warnings.
+def _build_proctoring_js(session_id: str) -> str:
+    """
+    Build proctoring JS with session_id baked in.
 
-PROCTORING_JS = """
+    Must be a function (not a module-level constant) because:
+    1. We inject session_id directly so the JS never needs to
+       READ window.top.location — only WRITE it (allowed cross-origin).
+    2. The guard is on window.top._proctoringActive so it persists
+       across Streamlit reruns even if the iframe is recreated.
+       If it were on the iframe's window it would reset every rerun,
+       causing duplicate listeners to pile up on window.top and
+       instantly triggering termination on the first blur.
+    """
+    return f"""
 <script>
-// st.components.v1.html() injects JS inside an iframe.
-// Every reference to window/document here is the IFRAME's —
-// not the real browser window. To reach the actual page:
-//   - use window.top for the real window + its sessionStorage
-//   - attach all listeners to window.top / window.top.document
-//   - use window.top.location.href to navigate Streamlit
-var top = window.top;
-var store = top.sessionStorage;
+(function() {{
+    var p = window.top;  // real browser window (allow-same-origin is set)
 
-// Initialise counters in the PARENT page's sessionStorage
-// so they survive Streamlit reruns (iframe may be recreated)
-if (!store.getItem('proc_violations')) {
-    store.setItem('proc_violations', '0');
-}
+    // ONE-TIME GUARD on window.top — survives Streamlit reruns.
+    // Without this every rerun adds another blur/visibilitychange
+    // listener to window.top, so violations pile up instantly.
+    if (p._proctoringActive) return;
+    p._proctoringActive = true;
 
-function terminate(reason) {
-    if (store.getItem('proc_terminating') === 'true') return;
-    store.setItem('proc_terminating', 'true');
-    var sid = new URLSearchParams(top.location.search)
-                  .get('session') || '';
-    alert(
-        'INTERVIEW TERMINATED.\\n\\n' +
-        reason + '\\n' +
-        'Your interview has been ended. ' +
-        'Please contact your recruiter.'
-    );
-    top.location.href =
-        top.location.pathname +
-        '?session=' + sid +
-        '&terminated=true';
-}
+    var store   = p.sessionStorage;
+    var SID     = "{session_id}";
 
-function recordViolation(reason) {
-    // Debounce: blur + visibilitychange both fire when the
-    // browser window is minimised — treat as one event.
-    var now = Date.now();
-    var last = parseInt(store.getItem('proc_last_ms') || '0');
-    if (now - last < 600) return;
-    store.setItem('proc_last_ms', now);
+    if (!store.getItem('proc_v')) store.setItem('proc_v', '0');
 
-    var v = parseInt(store.getItem('proc_violations')) + 1;
-    store.setItem('proc_violations', v);
-
-    if (v === 1) {
+    function terminate(reason) {{
+        if (store.getItem('proc_done') === '1') return;
+        store.setItem('proc_done', '1');
         alert(
-            'WARNING: ' + reason + '\\n\\n' +
-            'This is your first warning.\\n' +
-            'Doing this again will terminate ' +
-            'your interview immediately.'
+            'INTERVIEW TERMINATED.\\n\\n' +
+            reason + '\\n\\n' +
+            'Your interview has been ended. ' +
+            'Please contact your recruiter.'
         );
-    } else {
-        terminate(reason);
-    }
-}
+        // Relative URL — browser resolves against parent page path.
+        // WRITING location is always allowed, even cross-origin.
+        // SID is injected by Python so we never READ p.location.
+        p.location.href = '?session=' + SID + '&terminated=true';
+    }}
 
-// Tab switching — visibilitychange on the REAL page document
-top.document.addEventListener('visibilitychange', function() {
-    if (top.document.hidden) {
-        recordViolation('Tab switching detected.');
-    }
-});
+    function recordViolation(reason) {{
+        // Debounce: minimising fires both blur + visibilitychange
+        // within milliseconds — count them as one event.
+        var now  = Date.now();
+        var last = parseInt(store.getItem('proc_t') || '0');
+        if (now - last < 700) return;
+        store.setItem('proc_t', now);
 
-// App / window switching — blur on the REAL browser window
-// (Alt+Tab, Cmd+Tab, clicking another application)
-top.addEventListener('blur', function() {
-    recordViolation('Application or window switching detected.');
-});
+        var v = parseInt(store.getItem('proc_v')) + 1;
+        store.setItem('proc_v', v);
+
+        if (v === 1) {{
+            alert(
+                'WARNING: ' + reason + '\\n\\n' +
+                'This is your first warning.\\n' +
+                'Doing this again will immediately terminate ' +
+                'your interview.'
+            );
+        }} else {{
+            terminate(reason);
+        }}
+    }}
+
+    // Tab switching — fires on the REAL page document
+    p.document.addEventListener('visibilitychange', function() {{
+        if (p.document.hidden) {{
+            recordViolation('Tab switching detected.');
+        }}
+    }});
+
+    // App / window switching — fires on the REAL browser window
+    // (Cmd+Tab, Alt+Tab, clicking another application)
+    p.addEventListener('blur', function() {{
+        recordViolation('Application switching detected.');
+    }});
+}})();
 </script>
 """
 
@@ -174,8 +179,12 @@ if "interview_complete" not in st.session_state:
 if "terminated" not in st.session_state:
     st.session_state.terminated = False
 
-# ── Inject proctoring JS on every page ───────────────────
-st.components.v1.html(PROCTORING_JS, height=0)
+# ── Inject proctoring JS ─────────────────────────────────
+# Built here (not at module level) because session_id must be
+# baked into the JS to avoid reading window.top.location.
+# The one-time guard inside the JS ensures listeners are only
+# ever registered once on window.top, even across reruns.
+st.components.v1.html(_build_proctoring_js(session_id), height=0)
 
 # ════════════════════════════════════════════════════════
 # SCREEN 1 — WELCOME PAGE (before interview starts)
