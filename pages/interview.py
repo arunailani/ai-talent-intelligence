@@ -25,13 +25,32 @@ st.set_page_config(
 
 PROCTORING_JS = """
 <script>
-// Initialise violation counter in sessionStorage
-// so it persists across Streamlit reruns
+// Initialise counters in sessionStorage so they survive
+// Streamlit reruns (which re-inject this script each time)
 if (!sessionStorage.getItem('violations')) {
     sessionStorage.setItem('violations', '0');
 }
-if (!sessionStorage.getItem('terminated')) {
-    sessionStorage.setItem('terminated', 'false');
+if (!sessionStorage.getItem('blurCount')) {
+    sessionStorage.setItem('blurCount', '0');
+}
+
+// Redirect to terminated URL — Streamlit Python reads this
+// and blocks the page before rendering anything.
+// This is the only reliable way to terminate: reloading lets
+// Streamlit re-render and overwrite any JS-injected HTML.
+function terminate(reason) {
+    var params = new URLSearchParams(window.location.search);
+    var sid = params.get('session') || '';
+    alert(
+        'INTERVIEW TERMINATED.\\n\\n' +
+        reason + '\\n' +
+        'Your interview has been ended. ' +
+        'Please contact your recruiter.'
+    );
+    window.location.href =
+        window.location.pathname +
+        '?session=' + sid +
+        '&terminated=true';
 }
 
 document.addEventListener('visibilitychange', function() {
@@ -49,51 +68,29 @@ document.addEventListener('visibilitychange', function() {
                 'your interview immediately.'
             );
         } else if (violations >= 2) {
-            sessionStorage.setItem('terminated', 'true');
-            alert(
-                'INTERVIEW TERMINATED.\\n\\n' +
-                'You switched tabs more than once.\\n' +
-                'Your interview has been ended. ' +
-                'Please contact your recruiter.'
-            );
-            // Force page reload to show termination screen
-            window.location.reload();
+            terminate('You switched tabs more than once.');
         }
     }
 });
 
 // Also detect window blur — catches switching to
-// other applications like Word or Calculator
-var blurCount = 0;
+// other applications like Word or Calculator.
+// blurCount stored in sessionStorage so Streamlit reruns
+// do not reset it.
 window.addEventListener('blur', function() {
-    blurCount++;
+    var blurCount = parseInt(
+        sessionStorage.getItem('blurCount')
+    ) + 1;
+    sessionStorage.setItem('blurCount', blurCount);
+
     if (blurCount > 1) {
         var violations = parseInt(
             sessionStorage.getItem('violations')
         ) + 1;
         sessionStorage.setItem('violations', violations);
         if (violations >= 2) {
-            sessionStorage.setItem('terminated', 'true');
-            alert(
-                'INTERVIEW TERMINATED.\\n\\n' +
-                'Application switching detected.\\n' +
-                'Your interview has been ended.'
-            );
-            window.location.reload();
+            terminate('Application switching detected.');
         }
-    }
-});
-
-// Check termination status on every page load
-window.addEventListener('load', function() {
-    if (sessionStorage.getItem('terminated') === 'true') {
-        document.body.innerHTML =
-            '<div style="text-align:center;padding:60px;">' +
-            '<h1>Interview Terminated</h1>' +
-            '<p>Your interview was terminated due to ' +
-            'tab switching violations.</p>' +
-            '<p>Please contact your recruiter.</p>' +
-            '</div>';
     }
 });
 </script>
@@ -107,6 +104,20 @@ if not session_id:
     st.error(
         "Invalid interview link. "
         "Please contact your recruiter for the correct link."
+    )
+    st.stop()
+
+# ── Proctoring termination check ─────────────────────────
+# JS redirects here with &terminated=true on 2nd violation.
+# Must be checked before loading session so the page never
+# renders interview content after termination.
+if params.get("terminated") == "true":
+    st.title("Interview Terminated")
+    st.error(
+        "Your interview has been terminated due to "
+        "tab switching or application switching violations.\n\n"
+        "This decision is final and cannot be reversed.\n\n"
+        "Please contact your recruiter for next steps."
     )
     st.stop()
 
