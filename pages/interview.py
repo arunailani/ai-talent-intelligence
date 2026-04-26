@@ -25,73 +25,72 @@ st.set_page_config(
 
 PROCTORING_JS = """
 <script>
-// Initialise counters in sessionStorage so they survive
-// Streamlit reruns (which re-inject this script each time)
-if (!sessionStorage.getItem('violations')) {
-    sessionStorage.setItem('violations', '0');
-}
-if (!sessionStorage.getItem('blurCount')) {
-    sessionStorage.setItem('blurCount', '0');
+// st.components.v1.html() injects JS inside an iframe.
+// Every reference to window/document here is the IFRAME's —
+// not the real browser window. To reach the actual page:
+//   - use window.top for the real window + its sessionStorage
+//   - attach all listeners to window.top / window.top.document
+//   - use window.top.location.href to navigate Streamlit
+var top = window.top;
+var store = top.sessionStorage;
+
+// Initialise counters in the PARENT page's sessionStorage
+// so they survive Streamlit reruns (iframe may be recreated)
+if (!store.getItem('proc_violations')) {
+    store.setItem('proc_violations', '0');
 }
 
-// Redirect to terminated URL — Streamlit Python reads this
-// and blocks the page before rendering anything.
-// This is the only reliable way to terminate: reloading lets
-// Streamlit re-render and overwrite any JS-injected HTML.
 function terminate(reason) {
-    var params = new URLSearchParams(window.location.search);
-    var sid = params.get('session') || '';
+    if (store.getItem('proc_terminating') === 'true') return;
+    store.setItem('proc_terminating', 'true');
+    var sid = new URLSearchParams(top.location.search)
+                  .get('session') || '';
     alert(
         'INTERVIEW TERMINATED.\\n\\n' +
         reason + '\\n' +
         'Your interview has been ended. ' +
         'Please contact your recruiter.'
     );
-    window.location.href =
-        window.location.pathname +
+    top.location.href =
+        top.location.pathname +
         '?session=' + sid +
         '&terminated=true';
 }
 
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        var violations = parseInt(
-            sessionStorage.getItem('violations')
-        ) + 1;
-        sessionStorage.setItem('violations', violations);
+function recordViolation(reason) {
+    // Debounce: blur + visibilitychange both fire when the
+    // browser window is minimised — treat as one event.
+    var now = Date.now();
+    var last = parseInt(store.getItem('proc_last_ms') || '0');
+    if (now - last < 600) return;
+    store.setItem('proc_last_ms', now);
 
-        if (violations === 1) {
-            alert(
-                'WARNING: Tab switching detected.\\n\\n' +
-                'This is your first warning.\\n' +
-                'Switching tabs again will terminate ' +
-                'your interview immediately.'
-            );
-        } else if (violations >= 2) {
-            terminate('You switched tabs more than once.');
-        }
+    var v = parseInt(store.getItem('proc_violations')) + 1;
+    store.setItem('proc_violations', v);
+
+    if (v === 1) {
+        alert(
+            'WARNING: ' + reason + '\\n\\n' +
+            'This is your first warning.\\n' +
+            'Doing this again will terminate ' +
+            'your interview immediately.'
+        );
+    } else {
+        terminate(reason);
+    }
+}
+
+// Tab switching — visibilitychange on the REAL page document
+top.document.addEventListener('visibilitychange', function() {
+    if (top.document.hidden) {
+        recordViolation('Tab switching detected.');
     }
 });
 
-// Also detect window blur — catches switching to
-// other applications like Word or Calculator.
-// blurCount stored in sessionStorage so Streamlit reruns
-// do not reset it.
-window.addEventListener('blur', function() {
-    var blurCount = parseInt(
-        sessionStorage.getItem('blurCount')
-    ) + 1;
-    sessionStorage.setItem('blurCount', blurCount);
-
-    if (blurCount > 1) {
-        var violations = parseInt(
-            sessionStorage.getItem('violations')
-        ) + 1;
-        sessionStorage.setItem('violations', violations);
-        if (violations >= 2) {
-            terminate('Application switching detected.');
-        }
-    }
+// App / window switching — blur on the REAL browser window
+// (Alt+Tab, Cmd+Tab, clicking another application)
+top.addEventListener('blur', function() {
+    recordViolation('Application or window switching detected.');
 });
 </script>
 """
