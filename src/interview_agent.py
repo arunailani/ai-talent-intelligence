@@ -31,65 +31,91 @@ def generate_interview_questions(
     matched_skills: list,
     missing_skills: list,
     candidate_summary: str,
-    num_questions: int = 5
+    num_questions: int = 9
 ) -> list:
     """
-    Generates targeted interview questions based on:
-    - The job description requirements
-    - Skills the candidate has (probe depth of knowledge)
-    - Skills the candidate lacks (probe learning potential)
-    - The candidate's background summary
+    Generates exactly 9 purely technical interview questions
+    structured as 3 easy → 3 medium → 3 hard, calibrated to
+    the candidate's actual background and the role's required skills.
 
-    Returns a list of question dicts, each with:
-    id, question text, competency tested, question type
+    Returns a list of 9 question dicts, each with:
+    id, question text, competency tested, type ("technical"),
+    and difficulty ("easy" | "medium" | "hard")
     """
-    print(f"\n[Interview Agent] Generating {num_questions} questions...")
+    print(f"\n[Interview Agent] Generating {num_questions} technical questions (3 easy / 3 medium / 3 hard)...")
 
     prompt = ChatPromptTemplate.from_messages([
-        ("system", """You are a senior technical interviewer.
-Generate exactly {num_questions} interview questions
-for this specific candidate and role.
+        ("system", """You are a senior technical hiring manager who deeply
+understands what a high-performing team needs for this specific role.
 
-Rules:
-1. Mix question types across the {num_questions} questions:
-   - At least 2 technical questions testing matched skills
-   - At least 1 situational question about a missing skill
-   - At least 1 behavioural question about past experience
-   - At least 1 role-fit question about this specific job
+Generate exactly 9 purely technical interview questions for this candidate.
+Structure them in three difficulty tiers — 3 easy, 3 medium, 3 hard.
 
-2. Make questions specific to THIS candidate and THIS role.
-   Reference their actual background where relevant.
-   Do not use generic interview questions.
+DIFFICULTY DEFINITIONS:
 
-3. Each question should require a 2-3 minute verbal answer.
-   Not too easy, not impossibly hard.
+EASY (questions 1-3) — foundational knowledge, answerable from memory:
+  - "What is X and how does it work?"
+  - "Explain the difference between X and Y"
+  - "What are the key components / steps of X?"
 
-4. Return ONLY a valid JSON array. No markdown. No extra text.
-   Exactly this structure:
+MEDIUM (questions 4-6) — applied knowledge, requires real hands-on experience:
+  - "Walk me through how you would implement X"
+  - "You have a dataset with problem Y — how do you approach it?"
+  - "Describe a time you used X to solve a real problem"
+
+HARD (questions 7-9) — deep expertise, system-level thinking, senior-level:
+  - "What are the trade-offs between X and Y at scale?"
+  - "How would you debug X when it fails in production?"
+  - "Design a system that handles X under these constraints..."
+
+STRICT RULES:
+1. ALL 9 questions must be purely technical.
+   No behavioural, no situational, no role-fit questions whatsoever.
+2. Questions must be specific to the candidate's actual background
+   AND the JD's required skills. Reference the actual technologies
+   mentioned in both the resume and the job description.
+   Do not write generic questions.
+3. Difficulty must genuinely progress — easy questions must be easy,
+   hard questions must require senior-level depth.
+4. Each question should be answerable verbally in 2-4 minutes.
+   Not too narrow, not too broad.
+5. type must always be "technical" for all 9 questions.
+
+Return ONLY a valid JSON array. No markdown. No extra text.
+Exactly this structure for all 9 questions:
 [
   {{
     "id": 1,
     "question": "the full question text here",
-    "competency": "what skill or trait this tests",
-    "type": "technical"
+    "competency": "what specific concept or skill this tests",
+    "type": "technical",
+    "difficulty": "easy"
   }},
   {{
-    "id": 2,
+    "id": 4,
     "question": "the full question text here",
-    "competency": "what skill or trait this tests",
-    "type": "behavioural"
+    "competency": "what specific concept or skill this tests",
+    "type": "technical",
+    "difficulty": "medium"
+  }},
+  {{
+    "id": 7,
+    "question": "the full question text here",
+    "competency": "what specific concept or skill this tests",
+    "type": "technical",
+    "difficulty": "hard"
   }}
 ]
 
-Valid types: technical, situational, behavioural, role-fit
 Pure JSON array only. Nothing else."""),
-        ("human", """Candidate name  : {name}
-Role            : {role}
+        ("human", """Candidate name   : {name}
+Role             : {role}
 Candidate summary: {summary}
 Skills they have : {matched}
 Skills they lack : {missing}
 
-Generate exactly {num_questions} interview questions now.""")
+Generate exactly 9 technical questions now:
+questions 1-3 easy, 4-6 medium, 7-9 hard.""")
     ])
 
     chain = prompt | llm_strict | StrOutputParser()
@@ -97,7 +123,7 @@ Generate exactly {num_questions} interview questions now.""")
     raw = chain.invoke({
         "num_questions": num_questions,
         "name":          candidate_name,
-        "role":          job_description[:300],
+        "role":          job_description[:400],
         "summary":       candidate_summary,
         "matched":       ", ".join(matched_skills or []),
         "missing":       ", ".join(missing_skills or [])
@@ -121,63 +147,111 @@ Generate exactly {num_questions} interview questions now.""")
 
 def _fallback_questions(n: int) -> list:
     """
-    Returns generic but solid questions if LLM
-    JSON parsing fails. Ensures the interview
-    can always proceed regardless of LLM issues.
+    Returns 9 purely technical fallback questions (3 easy, 3 medium, 3 hard)
+    if LLM JSON parsing fails. Ensures the interview can always proceed.
     """
     base = [
+        # ── EASY ─────────────────────────────────────────────
         {
             "id": 1,
             "question": (
-                "Describe your most technically complex data project. "
-                "What was your specific role, what tools did you use, "
-                "and what was the measurable outcome?"
+                "What is the difference between a primary key and a foreign key "
+                "in a relational database? Give an example of each."
             ),
-            "competency": "Technical depth and impact",
-            "type": "technical"
+            "competency": "SQL fundamentals",
+            "type": "technical",
+            "difficulty": "easy"
         },
         {
             "id": 2,
             "question": (
-                "Tell me about a time you had to explain a complex "
-                "data finding to a non-technical business stakeholder. "
-                "How did you approach it and what was the result?"
+                "What is a pandas DataFrame and how does it differ from a "
+                "standard Python list or dictionary? When would you choose one over the other?"
             ),
-            "competency": "Communication and stakeholder management",
-            "type": "behavioural"
+            "competency": "Python / pandas fundamentals",
+            "type": "technical",
+            "difficulty": "easy"
         },
         {
             "id": 3,
             "question": (
-                "Imagine you join this team and discover the existing "
-                "data pipeline has significant quality issues affecting "
-                "business decisions. What steps would you take in your "
-                "first 30 days to address this?"
+                "What is a large language model (LLM) and what is the role "
+                "of a prompt in interacting with one? Explain in your own words."
             ),
-            "competency": "Problem solving and initiative",
-            "type": "situational"
+            "competency": "LLM / GenAI fundamentals",
+            "type": "technical",
+            "difficulty": "easy"
         },
+        # ── MEDIUM ───────────────────────────────────────────
         {
             "id": 4,
             "question": (
-                "What specifically attracts you to this role and "
-                "organisation? How does it align with where you want "
-                "to be in your career in the next 3 years?"
+                "Walk me through how you would write a SQL query to find "
+                "the top 5 customers by total revenue in the last 90 days, "
+                "including customers with no purchases in that window."
             ),
-            "competency": "Role fit and motivation",
-            "type": "role-fit"
+            "competency": "Applied SQL — aggregation and joins",
+            "type": "technical",
+            "difficulty": "medium"
         },
         {
             "id": 5,
             "question": (
-                "Walk me through how you stay current with new "
-                "developments in data and analytics. Give a specific "
-                "example of something you learned recently and applied "
-                "in your work."
+                "You have a Python script that processes a 10 GB CSV file "
+                "and it is running out of memory. Walk me through two or more "
+                "concrete approaches you would use to fix this."
             ),
-            "competency": "Learning agility and curiosity",
-            "type": "behavioural"
-        }
+            "competency": "Python performance and memory management",
+            "type": "technical",
+            "difficulty": "medium"
+        },
+        {
+            "id": 6,
+            "question": (
+                "Describe how you would build a retrieval-augmented generation "
+                "(RAG) pipeline from scratch. What components are required "
+                "and what does each one do?"
+            ),
+            "competency": "RAG architecture and LangChain / vector stores",
+            "type": "technical",
+            "difficulty": "medium"
+        },
+        # ── HARD ─────────────────────────────────────────────
+        {
+            "id": 7,
+            "question": (
+                "What are the trade-offs between using a vector database "
+                "versus a full-text search index (like Elasticsearch) for "
+                "semantic search in a production LLM application?"
+            ),
+            "competency": "Vector search and retrieval systems at scale",
+            "type": "technical",
+            "difficulty": "hard"
+        },
+        {
+            "id": 8,
+            "question": (
+                "Your data pipeline runs nightly and produces aggregated "
+                "metrics used by the business. One morning the metrics look "
+                "wrong but no errors were raised. How do you debug this "
+                "systematically and prevent it from recurring?"
+            ),
+            "competency": "Data quality and pipeline debugging in production",
+            "type": "technical",
+            "difficulty": "hard"
+        },
+        {
+            "id": 9,
+            "question": (
+                "Design a system that takes unstructured documents (PDFs, emails, "
+                "reports) and allows business users to ask natural-language questions "
+                "against them. What are the key components, where are the failure points, "
+                "and how would you ensure answer accuracy?"
+            ),
+            "competency": "End-to-end GenAI system design",
+            "type": "technical",
+            "difficulty": "hard"
+        },
     ]
     return base[:n]
 

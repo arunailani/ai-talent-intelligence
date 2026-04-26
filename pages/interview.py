@@ -299,16 +299,22 @@ elif not st.session_state.interview_complete:
     if current_index < total_questions:
         current_q = questions[current_index]
 
-        st.markdown(
-            f"### Question {current_index + 1} "
-            f"of {total_questions}"
-        )
+        col_heading, col_badge = st.columns([5, 1])
+        with col_heading:
+            st.markdown(
+                f"### Question {current_index + 1} "
+                f"of {total_questions}"
+            )
+        with col_badge:
+            difficulty = current_q.get("difficulty", "medium")
+            if difficulty == "easy":
+                st.success("EASY")
+            elif difficulty == "hard":
+                st.error("HARD")
+            else:
+                st.warning("MEDIUM")
 
-        c1, c2 = st.columns(2)
-        c1.caption(
-            f"Type: {current_q.get('type', 'general').title()}"
-        )
-        c2.caption(
+        st.caption(
             f"Testing: {current_q.get('competency', '')}"
         )
 
