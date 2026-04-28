@@ -17,85 +17,94 @@ st.set_page_config(
     layout="centered"
 )
 
-# ── Proctoring JavaScript ─────────────────────────────────
-# Injects browser-level tab visibility detection.
-# When candidate switches tabs or minimises window,
-# the browser fires a visibilitychange event.
-# We count violations and terminate after 2 warnings.
+def _build_proctoring_js(session_id: str) -> str:
+    """
+    Proctoring JS — runs inside the st.components.v1.html() iframe.
 
-PROCTORING_JS = """
+    The iframe sandbox includes allow-same-origin, so window.parent
+    is fully accessible (same origin as the Streamlit page).
+    All listeners, storage, alerts and navigation go through
+    window.parent so they operate on the real browser window —
+    not the hidden 0-height iframe.
+
+    Key fixes vs earlier versions:
+    - No parent-script injection (that added complexity and a stale
+      DOM-tag guard that blocked re-setup on new sessions).
+    - window.parent._proctoringActive guard lives on the parent
+      window object, so it survives Streamlit reruns but is cleared
+      on a full page reload (new session = new page load = clean slate).
+    - sessionStorage is reset on every fresh setup so stale proc_done
+      or proc_v from a previous test session never blocks detection.
+    - window.parent.alert() shows a native top-level alert, not the
+      "embedded page says" iframe alert.
+    - window.parent.location.href for navigation — setting location on
+      a same-origin parent is always allowed and causes a real reload
+      that Python reads via st.query_params.
+    """
+    return f"""
 <script>
-// Initialise violation counter in sessionStorage
-// so it persists across Streamlit reruns
-if (!sessionStorage.getItem('violations')) {
-    sessionStorage.setItem('violations', '0');
-}
-if (!sessionStorage.getItem('terminated')) {
-    sessionStorage.setItem('terminated', 'false');
-}
+(function() {{
+    var p = window.parent;   // fully accessible — same-origin sandbox
 
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        var violations = parseInt(
-            sessionStorage.getItem('violations')
-        ) + 1;
-        sessionStorage.setItem('violations', violations);
+    // One-time guard: survives Streamlit reruns (same iframe, same p).
+    // Cleared automatically on a full page reload (new session).
+    if (p._proctoringActive) return;
+    p._proctoringActive = true;
 
-        if (violations === 1) {
-            alert(
-                'WARNING: Tab switching detected.\\n\\n' +
+    var store = p.sessionStorage;
+    var SID   = "{session_id}";
+
+    // Always reset so stale state from prior test sessions
+    // never silently blocks detection or termination.
+    store.setItem('proc_v', '0');
+    store.removeItem('proc_done');
+    store.removeItem('proc_t');
+
+    function terminate(reason) {{
+        if (store.getItem('proc_done') === '1') return;
+        store.setItem('proc_done', '1');
+        // Use parent alert — shows as a proper top-level browser dialog.
+        p.alert(
+            'INTERVIEW TERMINATED.\\n\\n' +
+            reason + '\\n\\n' +
+            'Your interview has been ended. ' +
+            'Please contact your recruiter.'
+        );
+        // Navigate the parent page — relative URL keeps current path.
+        p.location.href = '?session=' + SID + '&terminated=true';
+    }}
+
+    function recordViolation(reason) {{
+        var now  = Date.now();
+        var last = parseInt(store.getItem('proc_t') || '0');
+        if (now - last < 700) return;   // debounce: blur+visibility both
+        store.setItem('proc_t', now);   // fire when minimising window
+
+        var v = parseInt(store.getItem('proc_v')) + 1;
+        store.setItem('proc_v', v);
+
+        if (v === 1) {{
+            p.alert(
+                'WARNING: ' + reason + '\\n\\n' +
                 'This is your first warning.\\n' +
-                'Switching tabs again will terminate ' +
-                'your interview immediately.'
+                'Doing this again will immediately terminate your interview.'
             );
-        } else if (violations >= 2) {
-            sessionStorage.setItem('terminated', 'true');
-            alert(
-                'INTERVIEW TERMINATED.\\n\\n' +
-                'You switched tabs more than once.\\n' +
-                'Your interview has been ended. ' +
-                'Please contact your recruiter.'
-            );
-            // Force page reload to show termination screen
-            window.location.reload();
-        }
-    }
-});
+        }} else {{
+            terminate(reason);
+        }}
+    }}
 
-// Also detect window blur — catches switching to
-// other applications like Word or Calculator
-var blurCount = 0;
-window.addEventListener('blur', function() {
-    blurCount++;
-    if (blurCount > 1) {
-        var violations = parseInt(
-            sessionStorage.getItem('violations')
-        ) + 1;
-        sessionStorage.setItem('violations', violations);
-        if (violations >= 2) {
-            sessionStorage.setItem('terminated', 'true');
-            alert(
-                'INTERVIEW TERMINATED.\\n\\n' +
-                'Application switching detected.\\n' +
-                'Your interview has been ended.'
-            );
-            window.location.reload();
-        }
-    }
-});
+    // Tab switching — visibilitychange on the real page document.
+    p.document.addEventListener('visibilitychange', function() {{
+        if (p.document.hidden) recordViolation('Tab switching detected.');
+    }});
 
-// Check termination status on every page load
-window.addEventListener('load', function() {
-    if (sessionStorage.getItem('terminated') === 'true') {
-        document.body.innerHTML =
-            '<div style="text-align:center;padding:60px;">' +
-            '<h1>Interview Terminated</h1>' +
-            '<p>Your interview was terminated due to ' +
-            'tab switching violations.</p>' +
-            '<p>Please contact your recruiter.</p>' +
-            '</div>';
-    }
-});
+    // App / window switching — blur on the real browser window.
+    // (Cmd+Tab on Mac, Alt+Tab on Windows, clicking another app)
+    p.addEventListener('blur', function() {{
+        recordViolation('Application switching detected.');
+    }});
+}})();
 </script>
 """
 
@@ -107,6 +116,20 @@ if not session_id:
     st.error(
         "Invalid interview link. "
         "Please contact your recruiter for the correct link."
+    )
+    st.stop()
+
+# ── Proctoring termination check ─────────────────────────
+# JS redirects here with &terminated=true on 2nd violation.
+# Must be checked before loading session so the page never
+# renders interview content after termination.
+if params.get("terminated") == "true":
+    st.title("Interview Terminated")
+    st.error(
+        "Your interview has been terminated due to "
+        "tab switching or application switching violations.\n\n"
+        "This decision is final and cannot be reversed.\n\n"
+        "Please contact your recruiter for next steps."
     )
     st.stop()
 
@@ -164,8 +187,12 @@ if "interview_complete" not in st.session_state:
 if "terminated" not in st.session_state:
     st.session_state.terminated = False
 
-# ── Inject proctoring JS on every page ───────────────────
-st.components.v1.html(PROCTORING_JS, height=0)
+# ── Inject proctoring JS ─────────────────────────────────
+# Built here (not at module level) because session_id must be
+# baked into the JS to avoid reading window.top.location.
+# The one-time guard inside the JS ensures listeners are only
+# ever registered once on window.top, even across reruns.
+st.components.v1.html(_build_proctoring_js(session_id), height=0)
 
 # ════════════════════════════════════════════════════════
 # SCREEN 1 — WELCOME PAGE (before interview starts)
@@ -299,16 +326,22 @@ elif not st.session_state.interview_complete:
     if current_index < total_questions:
         current_q = questions[current_index]
 
-        st.markdown(
-            f"### Question {current_index + 1} "
-            f"of {total_questions}"
-        )
+        col_heading, col_badge = st.columns([5, 1])
+        with col_heading:
+            st.markdown(
+                f"### Question {current_index + 1} "
+                f"of {total_questions}"
+            )
+        with col_badge:
+            difficulty = current_q.get("difficulty", "medium")
+            if difficulty == "easy":
+                st.success("EASY")
+            elif difficulty == "hard":
+                st.error("HARD")
+            else:
+                st.warning("MEDIUM")
 
-        c1, c2 = st.columns(2)
-        c1.caption(
-            f"Type: {current_q.get('type', 'general').title()}"
-        )
-        c2.caption(
+        st.caption(
             f"Testing: {current_q.get('competency', '')}"
         )
 
