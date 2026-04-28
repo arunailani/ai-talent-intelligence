@@ -19,72 +19,72 @@ st.set_page_config(
 
 def _build_proctoring_js(session_id: str) -> str:
     """
-    Inject proctoring into the PARENT PAGE DOM via script injection.
+    Proctoring JS — runs inside the st.components.v1.html() iframe.
 
-    Why not window.top.addEventListener() directly:
-      All previous approaches attached listeners to window.top FROM
-      the iframe context.  The blur event on window.top does not
-      reliably fire for OS-level app switching when the listener is
-      registered from a child iframe — the event path resolves
-      differently in Chrome/Safari.
+    The iframe sandbox includes allow-same-origin, so window.parent
+    is fully accessible (same origin as the Streamlit page).
+    All listeners, storage, alerts and navigation go through
+    window.parent so they operate on the real browser window —
+    not the hidden 0-height iframe.
 
-    The reliable fix:
-      Append a <script> element to window.parent.document.head.
-      That script runs in the PARENT PAGE CONTEXT where window IS
-      the real browser window.  window.addEventListener('blur') and
-      document.addEventListener('visibilitychange') both work
-      unconditionally here — no iframe restrictions at all.
-
-    Duplicate-registration guard:
-      We tag the injected <script> with id="__proctor".  On each
-      Streamlit rerun the iframe re-checks: if the tag already exists,
-      skip injection.  The parent-context script also guards itself
-      with window.__proctoringActive so a race between two fast
-      reruns cannot double-register.
+    Key fixes vs earlier versions:
+    - No parent-script injection (that added complexity and a stale
+      DOM-tag guard that blocked re-setup on new sessions).
+    - window.parent._proctoringActive guard lives on the parent
+      window object, so it survives Streamlit reruns but is cleared
+      on a full page reload (new session = new page load = clean slate).
+    - sessionStorage is reset on every fresh setup so stale proc_done
+      or proc_v from a previous test session never blocks detection.
+    - window.parent.alert() shows a native top-level alert, not the
+      "embedded page says" iframe alert.
+    - window.parent.location.href for navigation — setting location on
+      a same-origin parent is always allowed and causes a real reload
+      that Python reads via st.query_params.
     """
     return f"""
 <script>
 (function() {{
-    var par = window.parent;
+    var p = window.parent;   // fully accessible — same-origin sandbox
 
-    // If our script tag is already in the parent DOM, nothing to do.
-    if (par.document.getElementById('__proctor')) return;
+    // One-time guard: survives Streamlit reruns (same iframe, same p).
+    // Cleared automatically on a full page reload (new session).
+    if (p._proctoringActive) return;
+    p._proctoringActive = true;
 
-    var s   = par.document.createElement('script');
-    s.id    = '__proctor';
-    s.textContent = `
-(function() {{
-    if (window.__proctoringActive) return;
-    window.__proctoringActive = true;
-
-    var store = window.sessionStorage;
+    var store = p.sessionStorage;
     var SID   = "{session_id}";
 
-    if (!store.getItem('proc_v')) store.setItem('proc_v', '0');
+    // Always reset so stale state from prior test sessions
+    // never silently blocks detection or termination.
+    store.setItem('proc_v', '0');
+    store.removeItem('proc_done');
+    store.removeItem('proc_t');
 
     function terminate(reason) {{
         if (store.getItem('proc_done') === '1') return;
         store.setItem('proc_done', '1');
-        alert(
+        // Use parent alert — shows as a proper top-level browser dialog.
+        p.alert(
             'INTERVIEW TERMINATED.\\n\\n' +
             reason + '\\n\\n' +
-            'Your interview has been ended.\\n' +
+            'Your interview has been ended. ' +
             'Please contact your recruiter.'
         );
-        window.location.href = '?session={session_id}&terminated=true';
+        // Navigate the parent page — relative URL keeps current path.
+        p.location.href = '?session=' + SID + '&terminated=true';
     }}
 
     function recordViolation(reason) {{
         var now  = Date.now();
         var last = parseInt(store.getItem('proc_t') || '0');
-        if (now - last < 700) return;   // debounce for minimise
-        store.setItem('proc_t', now);
+        if (now - last < 700) return;   // debounce: blur+visibility both
+        store.setItem('proc_t', now);   // fire when minimising window
 
         var v = parseInt(store.getItem('proc_v')) + 1;
         store.setItem('proc_v', v);
 
         if (v === 1) {{
-            alert(
+            p.alert(
                 'WARNING: ' + reason + '\\n\\n' +
                 'This is your first warning.\\n' +
                 'Doing this again will immediately terminate your interview.'
@@ -94,18 +94,16 @@ def _build_proctoring_js(session_id: str) -> str:
         }}
     }}
 
-    // Tab switching
-    document.addEventListener('visibilitychange', function() {{
-        if (document.hidden) recordViolation('Tab switching detected.');
+    // Tab switching — visibilitychange on the real page document.
+    p.document.addEventListener('visibilitychange', function() {{
+        if (p.document.hidden) recordViolation('Tab switching detected.');
     }});
 
-    // App / window switching  (Cmd+Tab, Alt+Tab, clicking another app)
-    window.addEventListener('blur', function() {{
+    // App / window switching — blur on the real browser window.
+    // (Cmd+Tab on Mac, Alt+Tab on Windows, clicking another app)
+    p.addEventListener('blur', function() {{
         recordViolation('Application switching detected.');
     }});
-}})();
-    `;
-    par.document.head.appendChild(s);
 }})();
 </script>
 """
