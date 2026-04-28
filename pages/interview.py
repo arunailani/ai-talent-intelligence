@@ -21,89 +21,106 @@ def _build_proctoring_js(session_id: str) -> str:
     """
     Proctoring JS — runs inside the st.components.v1.html() iframe.
 
-    The iframe sandbox includes allow-same-origin, so window.parent
-    is fully accessible (same origin as the Streamlit page).
-    All listeners, storage, alerts and navigation go through
-    window.parent so they operate on the real browser window —
-    not the hidden 0-height iframe.
+    Navigation fix (root cause of all previous redirect failures):
+      Previous code used '?session=...&terminated=true' — a relative
+      URL starting with '?' is resolved against the iframe's base URL.
+      For srcdoc iframes the base URL can be 'about:srcdoc', so the
+      navigation went nowhere.  Now we use the absolute path
+      '/interview?session=...&terminated=true' which works on any host
+      (localhost, Streamlit Cloud, etc.) regardless of iframe origin.
 
-    Key fixes vs earlier versions:
-    - No parent-script injection (that added complexity and a stale
-      DOM-tag guard that blocked re-setup on new sessions).
-    - window.parent._proctoringActive guard lives on the parent
-      window object, so it survives Streamlit reruns but is cleared
-      on a full page reload (new session = new page load = clean slate).
-    - sessionStorage is reset on every fresh setup so stale proc_done
-      or proc_v from a previous test session never blocks detection.
-    - window.parent.alert() shows a native top-level alert, not the
-      "embedded page says" iframe alert.
-    - window.parent.location.href for navigation — setting location on
-      a same-origin parent is always allowed and causes a real reload
-      that Python reads via st.query_params.
+    Three navigation fallbacks so one failure can't block everything:
+      1. window.parent.location.href  (same-origin direct)
+      2. window.top.location.href     (same-origin direct)
+      3. <a target="_top"> click      (works even cross-origin)
+
+    Guard: window._proctoringSetup on the iframe window (always
+      writable). Streamlit reuses the same iframe when HTML content
+      is unchanged, so this persists across reruns and prevents
+      duplicate listeners.  Cleared automatically on full page reload.
+
+    All window.parent access is wrapped in try/catch so a cross-origin
+      SecurityError never silently kills the entire script.
     """
     return f"""
 <script>
 (function() {{
-    var p = window.parent;   // fully accessible — same-origin sandbox
+    // Guard — prevents duplicate listeners on Streamlit reruns.
+    // Lives on the iframe window (always writable, no cross-origin issue).
+    if (window._proctoringSetup) return;
+    window._proctoringSetup = true;
 
-    // One-time guard: survives Streamlit reruns (same iframe, same p).
-    // Cleared automatically on a full page reload (new session).
-    if (p._proctoringActive) return;
-    p._proctoringActive = true;
-
-    var store = p.sessionStorage;
+    var store = window.sessionStorage;
     var SID   = "{session_id}";
 
-    // Always reset so stale state from prior test sessions
-    // never silently blocks detection or termination.
+    // Always reset — stale proc_done from a previous test in this tab
+    // would otherwise silently block every termination attempt.
     store.setItem('proc_v', '0');
     store.removeItem('proc_done');
     store.removeItem('proc_t');
 
+    function navigate() {{
+        // Absolute path — resolves correctly on any host.
+        // Relative '?...' fails when iframe base URL is about:srcdoc.
+        var url = '/interview?session=' + SID + '&terminated=true';
+        try {{ window.parent.location.href = url; }} catch(e) {{}}
+        try {{ window.top.location.href    = url; }} catch(e) {{}}
+        // Final fallback: anchor with target="_top" works cross-origin.
+        var a = document.createElement('a');
+        a.href = url; a.target = '_top';
+        document.body.appendChild(a); a.click();
+    }}
+
     function terminate(reason) {{
         if (store.getItem('proc_done') === '1') return;
         store.setItem('proc_done', '1');
-        // Use parent alert — shows as a proper top-level browser dialog.
-        p.alert(
-            'INTERVIEW TERMINATED.\\n\\n' +
-            reason + '\\n\\n' +
-            'Your interview has been ended. ' +
-            'Please contact your recruiter.'
+        alert(
+            'INTERVIEW TERMINATED.\\n\\n' + reason +
+            '\\n\\nYour interview has been ended.' +
+            ' Please contact your recruiter.'
         );
-        // Navigate the parent page — relative URL keeps current path.
-        p.location.href = '?session=' + SID + '&terminated=true';
+        navigate();
     }}
 
     function recordViolation(reason) {{
         var now  = Date.now();
         var last = parseInt(store.getItem('proc_t') || '0');
-        if (now - last < 700) return;   // debounce: blur+visibility both
-        store.setItem('proc_t', now);   // fire when minimising window
+        if (now - last < 700) return;   // debounce — minimise fires both
+        store.setItem('proc_t', now);   // blur + visibilitychange at once
 
         var v = parseInt(store.getItem('proc_v')) + 1;
         store.setItem('proc_v', v);
-
         if (v === 1) {{
-            p.alert(
+            alert(
                 'WARNING: ' + reason + '\\n\\n' +
-                'This is your first warning.\\n' +
-                'Doing this again will immediately terminate your interview.'
+                'This is your first warning. ' +
+                'One more violation will immediately terminate your interview.'
             );
         }} else {{
             terminate(reason);
         }}
     }}
 
-    // Tab switching — visibilitychange on the real page document.
-    p.document.addEventListener('visibilitychange', function() {{
-        if (p.document.hidden) recordViolation('Tab switching detected.');
+    // ── Tab switching ──────────────────────────────────────
+    // visibilitychange fires on the iframe document when the browser
+    // tab is hidden — confirmed to work from inside an iframe.
+    document.addEventListener('visibilitychange', function() {{
+        if (document.hidden) recordViolation('Tab switching detected.');
     }});
 
-    // App / window switching — blur on the real browser window.
-    // (Cmd+Tab on Mac, Alt+Tab on Windows, clicking another app)
-    p.addEventListener('blur', function() {{
-        recordViolation('Application switching detected.');
-    }});
+    // ── App / window switching ─────────────────────────────
+    // Try parent window blur (fires when OS takes focus away).
+    // If window.parent is cross-origin this throws — catch and fall
+    // back to iframe window blur.
+    try {{
+        window.parent.addEventListener('blur', function() {{
+            recordViolation('Application switching detected.');
+        }});
+    }} catch(e) {{
+        window.addEventListener('blur', function() {{
+            recordViolation('Application switching detected.');
+        }});
+    }}
 }})();
 </script>
 """
