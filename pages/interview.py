@@ -19,30 +19,46 @@ st.set_page_config(
 
 def _build_proctoring_js(session_id: str) -> str:
     """
-    Build proctoring JS with session_id baked in.
+    Inject proctoring into the PARENT PAGE DOM via script injection.
 
-    Must be a function (not a module-level constant) because:
-    1. We inject session_id directly so the JS never needs to
-       READ window.top.location — only WRITE it (allowed cross-origin).
-    2. The guard is on window.top._proctoringActive so it persists
-       across Streamlit reruns even if the iframe is recreated.
-       If it were on the iframe's window it would reset every rerun,
-       causing duplicate listeners to pile up on window.top and
-       instantly triggering termination on the first blur.
+    Why not window.top.addEventListener() directly:
+      All previous approaches attached listeners to window.top FROM
+      the iframe context.  The blur event on window.top does not
+      reliably fire for OS-level app switching when the listener is
+      registered from a child iframe — the event path resolves
+      differently in Chrome/Safari.
+
+    The reliable fix:
+      Append a <script> element to window.parent.document.head.
+      That script runs in the PARENT PAGE CONTEXT where window IS
+      the real browser window.  window.addEventListener('blur') and
+      document.addEventListener('visibilitychange') both work
+      unconditionally here — no iframe restrictions at all.
+
+    Duplicate-registration guard:
+      We tag the injected <script> with id="__proctor".  On each
+      Streamlit rerun the iframe re-checks: if the tag already exists,
+      skip injection.  The parent-context script also guards itself
+      with window.__proctoringActive so a race between two fast
+      reruns cannot double-register.
     """
     return f"""
 <script>
 (function() {{
-    var p = window.top;  // real browser window (allow-same-origin is set)
+    var par = window.parent;
 
-    // ONE-TIME GUARD on window.top — survives Streamlit reruns.
-    // Without this every rerun adds another blur/visibilitychange
-    // listener to window.top, so violations pile up instantly.
-    if (p._proctoringActive) return;
-    p._proctoringActive = true;
+    // If our script tag is already in the parent DOM, nothing to do.
+    if (par.document.getElementById('__proctor')) return;
 
-    var store   = p.sessionStorage;
-    var SID     = "{session_id}";
+    var s   = par.document.createElement('script');
+    s.id    = '__proctor';
+    s.textContent = `
+(function() {{
+    if (window.__proctoringActive) return;
+    window.__proctoringActive = true;
+
+    var store = window.sessionStorage;
+    var SID   = "{session_id}";
 
     if (!store.getItem('proc_v')) store.setItem('proc_v', '0');
 
@@ -52,21 +68,16 @@ def _build_proctoring_js(session_id: str) -> str:
         alert(
             'INTERVIEW TERMINATED.\\n\\n' +
             reason + '\\n\\n' +
-            'Your interview has been ended. ' +
+            'Your interview has been ended.\\n' +
             'Please contact your recruiter.'
         );
-        // Relative URL — browser resolves against parent page path.
-        // WRITING location is always allowed, even cross-origin.
-        // SID is injected by Python so we never READ p.location.
-        p.location.href = '?session=' + SID + '&terminated=true';
+        window.location.href = '?session={session_id}&terminated=true';
     }}
 
     function recordViolation(reason) {{
-        // Debounce: minimising fires both blur + visibilitychange
-        // within milliseconds — count them as one event.
         var now  = Date.now();
         var last = parseInt(store.getItem('proc_t') || '0');
-        if (now - last < 700) return;
+        if (now - last < 700) return;   // debounce for minimise
         store.setItem('proc_t', now);
 
         var v = parseInt(store.getItem('proc_v')) + 1;
@@ -76,26 +87,25 @@ def _build_proctoring_js(session_id: str) -> str:
             alert(
                 'WARNING: ' + reason + '\\n\\n' +
                 'This is your first warning.\\n' +
-                'Doing this again will immediately terminate ' +
-                'your interview.'
+                'Doing this again will immediately terminate your interview.'
             );
         }} else {{
             terminate(reason);
         }}
     }}
 
-    // Tab switching — fires on the REAL page document
-    p.document.addEventListener('visibilitychange', function() {{
-        if (p.document.hidden) {{
-            recordViolation('Tab switching detected.');
-        }}
+    // Tab switching
+    document.addEventListener('visibilitychange', function() {{
+        if (document.hidden) recordViolation('Tab switching detected.');
     }});
 
-    // App / window switching — fires on the REAL browser window
-    // (Cmd+Tab, Alt+Tab, clicking another application)
-    p.addEventListener('blur', function() {{
+    // App / window switching  (Cmd+Tab, Alt+Tab, clicking another app)
+    window.addEventListener('blur', function() {{
         recordViolation('Application switching detected.');
     }});
+}})();
+    `;
+    par.document.head.appendChild(s);
 }})();
 </script>
 """
